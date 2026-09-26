@@ -40,6 +40,14 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   kept its UDP socket, DTLS and SCTP association alive until the process
   exited — one per call on the single-relay path, one per offered relay with
   the fanout. Unit-tested with a fake connect (cancel, timeout, late failure).
+- The relay channel is closed as soon as the call ends. The receive loop only
+  checked for cancellation between packets, so a call that ended before the
+  peer ever sent media (hung up while ringing, unanswered) stayed blocked in
+  Recv forever and never closed its relays — one leaked connection per such
+  call before the fanout, one per offered relay with it. A receive error after
+  the call ended now reports the cancellation, as before. Unit-tested
+  (closes on end, stop keeps it open); live: an outbound call hung up while
+  ringing leaked 3 sockets before and 1 on the pre-fanout pin.
 
 
 ### media/group-runtime — `KAT-verified`

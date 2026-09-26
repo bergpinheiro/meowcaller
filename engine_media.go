@@ -268,6 +268,25 @@ func awaitRelayConnect[T any](ctx context.Context, timeout time.Duration, connec
 	}
 }
 
+// closeOnDone closes c once ctx is done. The returned stop releases the
+// watcher when the caller finishes first; calling it more than once is safe.
+func closeOnDone(ctx context.Context, c io.Closer) (stop func()) {
+	stopped := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			select {
+			case <-stopped:
+			default:
+				_ = c.Close()
+			}
+		case <-stopped:
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { close(stopped) }) }
+}
+
 // runMedia runs the per-frame media loop over the relay DataChannel: the Player's frames
 // (or silence) → MLow → E2E-SRTP protect → DataChannel, and DataChannel → classify →
 // unprotect → MLow decode → the Call's sink. A 1 Hz allocate+ping keepalive holds the
@@ -319,6 +338,8 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		return err
 	}
 	defer ch.Close()
+	stopCloseOnDone := closeOnDone(ctx, ch)
+	defer stopCloseOnDone()
 	allocateState := newGroupRelayAllocateStateWithHBHFEC(
 		ch.allocs[0],
 		rd.relayKeyASCII,
@@ -914,6 +935,9 @@ func (e *engine) runMedia(ctx context.Context, callID string, call *Call, callKe
 		}
 		n, err := ch.Recv(buf)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			return fmt.Errorf("relay recv: %w", err)
 		}
 		currentRosterGeneration, activeReceivers := audioReceivers.ActiveReceiverSnapshot()

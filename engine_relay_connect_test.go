@@ -105,6 +105,46 @@ func TestAwaitRelayConnectClosesConnectionCompletedAfterTimeout(t *testing.T) {
 	}
 }
 
+type closeRecorder struct {
+	closes chan struct{}
+}
+
+func (c *closeRecorder) Close() error {
+	c.closes <- struct{}{}
+	return nil
+}
+
+func TestCloseOnDoneClosesWhenCallEnds(t *testing.T) {
+	rec := &closeRecorder{closes: make(chan struct{}, 2)}
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := closeOnDone(ctx, rec)
+	defer stop()
+
+	cancel()
+
+	select {
+	case <-rec.closes:
+	case <-time.After(2 * time.Second):
+		t.Fatal("channel was not closed when the call ended")
+	}
+}
+
+func TestCloseOnDoneStopKeepsChannelOpen(t *testing.T) {
+	rec := &closeRecorder{closes: make(chan struct{}, 2)}
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := closeOnDone(ctx, rec)
+
+	stop()
+	stop()
+	cancel()
+
+	select {
+	case <-rec.closes:
+		t.Fatal("channel was closed after stop")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestAwaitRelayConnectIgnoresConnectFailingAfterCancel(t *testing.T) {
 	closed := make(chan *fakeRelayConn, 1)
 	release := make(chan struct{})

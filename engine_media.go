@@ -143,11 +143,17 @@ func (e *engine) connectAndAllocateAll(ctx context.Context, rd *relayData, strea
 	var allocs [][]byte
 	var names []string
 	for _, ep := range targets {
+		if ctx.Err() != nil {
+			e.c.log.Debug().Int("connected", len(chans)).Int("offered", len(targets)).Msg("call cancelled before every relay was connected")
+			break
+		}
 		ch, allocate, err := e.connectOneRelay(ctx, rd, ep, streamSsrcs)
 		if err != nil {
 			// Secondary relays failing is survivable; the primary failing with
 			// no fallback is not.
-			e.c.log.Warn().Err(err).Str("relay_name", ep.relayName).Msg("relay connect failed; continuing without it")
+			if ctx.Err() == nil {
+				e.c.log.Warn().Err(err).Str("relay_name", ep.relayName).Msg("relay connect failed; continuing without it")
+			}
 			continue
 		}
 		chans = append(chans, ch)
@@ -155,6 +161,9 @@ func (e *engine) connectAndAllocateAll(ctx context.Context, rd *relayData, strea
 		names = append(names, ep.relayName)
 	}
 	if len(chans) == 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("no relay reachable (%d offered)", len(targets))
 	}
 	e.c.log.Info().Int("connected", len(chans)).Int("offered", len(targets)).Strs("relays", names).Msg("relay fanout established")
@@ -178,26 +187,14 @@ func (e *engine) connectOneRelay(ctx context.Context, rd *relayData, ep *relayEn
 		"ipv4": ep.addresses[0].ipv4, "port": ep.addresses[0].port, "token_id": ep.tokenID,
 	})
 
-	type result struct {
-		ch  *relay.RelayMediaChannel
-		err error
-	}
-	done := make(chan result, 1)
-	go func() {
-		ch, err := relay.ConnectRelayMedia(addr, relay.WithLogger(log))
-		done <- result{ch, err}
-	}()
-	var ch *relay.RelayMediaChannel
-	select {
-	case r := <-done:
-		if r.err != nil {
-			return nil, nil, fmt.Errorf("relay connect: %w", r.err)
-		}
-		ch = r.ch
-	case <-time.After(12 * time.Second):
-		return nil, nil, fmt.Errorf("relay connect timed out (DTLS didn't complete)")
-	case <-ctx.Done():
-		return nil, nil, ctx.Err()
+	ch, err := awaitRelayConnect(ctx, 12*time.Second, func() (*relay.RelayMediaChannel, error) {
+		return relay.ConnectRelayMedia(addr, relay.WithLogger(log))
+	}, func(late *relay.RelayMediaChannel) {
+		log.Debug().Str("relay_name", ep.relayName).Msg("closing relay connection that completed after the call gave up on it")
+		_ = late.Close()
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 	log.Info().Str("relay_name", ep.relayName).Msg("relay DataChannel open")
 
@@ -233,6 +230,42 @@ func (e *engine) connectOneRelay(ctx context.Context, rd *relayData, ep *relayEn
 		"stream_ssrcs": streamSsrcs,
 	})
 	return ch, allocate, nil
+}
+
+// awaitRelayConnect runs connect in the background and waits for it, the
+// timeout or ctx. A connection that completes after the wait gave up is passed
+// to closeLate.
+func awaitRelayConnect[T any](ctx context.Context, timeout time.Duration, connect func() (T, error), closeLate func(T)) (T, error) {
+	type result struct {
+		conn T
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		conn, err := connect()
+		done <- result{conn, err}
+	}()
+	giveUp := func() {
+		go func() {
+			if r := <-done; r.err == nil {
+				closeLate(r.conn)
+			}
+		}()
+	}
+	var zero T
+	select {
+	case r := <-done:
+		if r.err != nil {
+			return zero, fmt.Errorf("relay connect: %w", r.err)
+		}
+		return r.conn, nil
+	case <-time.After(timeout):
+		giveUp()
+		return zero, fmt.Errorf("relay connect timed out (DTLS didn't complete)")
+	case <-ctx.Done():
+		giveUp()
+		return zero, ctx.Err()
+	}
 }
 
 // runMedia runs the per-frame media loop over the relay DataChannel: the Player's frames

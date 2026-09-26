@@ -34,6 +34,12 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   single-relay semantics. Live-validated against Android (consumer and
   Business), iPhone, and web callers; the live relay hop has no KAT vector,
   matching the validation state of the existing relay code.
+- A relay connection that completes after its call was cancelled (rejected,
+  hung up) or timed out is now closed instead of left open, and a cancelled
+  call stops connecting the remaining relays. Before, each such connection
+  kept its UDP socket, DTLS and SCTP association alive until the process
+  exited — one per call on the single-relay path, one per offered relay with
+  the fanout. Unit-tested with a fake connect (cancel, timeout, late failure).
 
 
 ### media/group-runtime — `KAT-verified`

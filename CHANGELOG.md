@@ -33,8 +33,11 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   error="500">` and the call dropped; with it, the server accepts. Live-validated
   on a coexistence account and on a regular one (both answered); the other
   differences seen in a working third-party accept (`net medium="3"`, no
-  `<metadata>`) were tested and are not needed. If encrypting fails the accept
-  goes without the `<enc>`, as before.
+  `<metadata>`) were tested and are not needed. The `<enc>` is attached only
+  under an established Signal session (a `msg`); with none, or one that would
+  send a `pkmsg` (which needs a `<device-identity>` the accept does not carry),
+  the accept goes without it, as before. No prekeys are fetched while handling
+  the `mute_v2` node.
 
 
 ### media/relay-fanout — `implemented`

@@ -115,13 +115,13 @@ type AcceptParams struct {
 	To           types.JID
 	CallCreator  types.JID
 	AudioRates   []string
-	RelayTe      []byte         // nil = absent
-	Rte          []byte         // nil = absent
-	VoipSettings []byte         // nil = absent
-	Capability   []byte         // nil = absent
-	Metadata     waBinary.Attrs // nil = absent
-	Video        bool           // true = advertise <video> (video call)
-	Enc          *waBinary.Node // nil = absent; the callKey encrypted back to the caller's device
+	RelayTe      []byte          // nil = absent
+	Rte          []byte          // nil = absent
+	VoipSettings []byte          // nil = absent
+	Capability   []byte          // nil = absent
+	Metadata     waBinary.Attrs  // nil = absent
+	Video        bool            // true = advertise <video> (video call)
+	Enc          *OfferDeviceKey // nil = absent; the callKey encrypted back to the caller's device
 }
 
 // BuildAccept builds <accept>: audio → [video] → [te priority=2] → net medium=2 → [enc] → encopt →
@@ -151,7 +151,7 @@ func BuildAccept(p *AcceptParams, log ...zerolog.Logger) waBinary.Node {
 	}
 	children = append(children, waBinary.Node{Tag: "net", Attrs: waBinary.Attrs{"medium": "2"}})
 	if p.Enc != nil {
-		children = append(children, *p.Enc)
+		children = append(children, encNode(*p.Enc))
 	}
 	children = append(children, waBinary.Node{Tag: "encopt", Attrs: waBinary.Attrs{"keygen": "2"}})
 	if p.Capability != nil {

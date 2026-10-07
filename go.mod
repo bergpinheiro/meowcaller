@@ -10,6 +10,7 @@ require (
 	github.com/pion/opus v0.1.0
 	github.com/pion/sctp v1.9.4
 	github.com/rs/zerolog v1.35.1
+	go.mau.fi/libsignal v0.2.2
 	go.mau.fi/whatsmeow v0.0.0-20260722203353-e9a033b24933
 	google.golang.org/protobuf v1.36.11
 )
@@ -25,7 +26,6 @@ require (
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/transport/v4 v4.0.1 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.27 // indirect
-	go.mau.fi/libsignal v0.2.2 // indirect
 	go.mau.fi/util v0.9.12-0.20260717235539-f9ffa7eca58d // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/net v0.57.0 // indirect

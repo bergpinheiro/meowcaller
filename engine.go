@@ -734,21 +734,19 @@ func (e *engine) sendAccept(callID string, to, creator types.JID) {
 	e.c.log.Info().Str("call_id", callID).Bool("video", isVideo).Msg("accepted (after mute_v2)")
 }
 
-// acceptCallKeyEnc encrypts the callKey to the caller's device for the <accept>. On failure the
-// accept goes without it, as before, which still works for accounts that are not in coexistence.
-func (e *engine) acceptCallKeyEnc(callID string, to types.JID, callKey []byte) *waBinary.Node {
+// acceptCallKeyEnc encrypts the callKey to the caller's device for the <accept>. Without an
+// established session the accept goes without it, as before, which still works for accounts that
+// are not in coexistence.
+func (e *engine) acceptCallKeyEnc(callID string, to types.JID, callKey []byte) *signaling.OfferDeviceKey {
 	if len(callKey) == 0 {
 		return nil
 	}
-	ct, encType, needIdentity, err := encryptCallKeyForDevice(context.Background(), e.c.wa, to, callKey)
+	dk, err := encryptCallKeyInSession(context.Background(), e.c.wa, to, callKey)
 	if err != nil {
-		e.c.log.Warn().Err(err).Str("call_id", callID).Msg("encrypt callKey for accept failed; accepting without it")
+		e.c.log.Warn().Err(err).Str("call_id", callID).Msg("accepting without the callKey")
 		return nil
 	}
-	if needIdentity {
-		e.c.log.Warn().Str("call_id", callID).Str("enc_type", encType).Msg("accept callKey needs a new session; the peer may not decrypt it")
-	}
-	return &waBinary.Node{Tag: "enc", Attrs: waBinary.Attrs{"v": "2", "type": encType, "count": "0"}, Content: ct}
+	return dk
 }
 
 // reject declines an inbound call.
@@ -1526,6 +1524,29 @@ func encryptCallKeyForDevice(ctx context.Context, cli *whatsmeow.Client, dev typ
 		return nil, "", false, errors.New("enc node has no ciphertext")
 	}
 	return ct, enc.AttrGetter().String("type"), needIdentity, nil
+}
+
+// encryptCallKeyInSession encrypts the callKey for dev only under an established Signal session:
+// it never fetches prekeys (it runs in the node handler) and refuses a pkmsg, which would need a
+// <device-identity> the <accept> does not carry.
+func encryptCallKeyInSession(ctx context.Context, cli *whatsmeow.Client, dev types.JID, callKey []byte) (*signaling.OfferDeviceKey, error) {
+	pt, err := callKeyPlaintext(callKey)
+	if err != nil {
+		return nil, err
+	}
+	enc, _, err := cli.DangerousInternals().EncryptMessageForDevice(ctx, pt, dev, nil, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	encType := enc.AttrGetter().String("type")
+	if encType != "msg" {
+		return nil, fmt.Errorf("no established session with %s (would send %s)", dev, encType)
+	}
+	ct, ok := enc.Content.([]byte)
+	if !ok {
+		return nil, errors.New("enc node has no ciphertext")
+	}
+	return &signaling.OfferDeviceKey{DeviceJid: dev, Ciphertext: ct, EncType: encType}, nil
 }
 
 // decryptInboundCallKey pulls the <enc> from the offer node and decrypts the

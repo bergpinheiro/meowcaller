@@ -1044,11 +1044,16 @@ func (e *engine) fromOwnAccount(jid types.JID) bool {
 		return false
 	}
 	for _, own := range e.c.groupSelfJIDs() {
-		if own.User == jid.User {
+		if own.User == jid.User && isLIDServer(own.Server) == isLIDServer(jid.Server) {
 			return true
 		}
 	}
 	return false
+}
+
+// isLIDServer reports whether server addresses LIDs rather than phone numbers.
+func isLIDServer(server string) bool {
+	return server == types.HiddenUserServer || server == types.HostedLIDServer
 }
 
 // rlProbe is one relay candidate from a relaylatency probe.

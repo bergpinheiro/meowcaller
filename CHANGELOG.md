@@ -23,7 +23,9 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   second while the phone kept ringing, and the client ended the call on that
   reject, so it could no longer be answered here. The call now ends on its
   terminate (`accepted_elsewhere`, `rejected_elsewhere`, the caller hanging up
-  or timing out). A reject from the peer still ends the call as before.
+  or timing out). A reject from the peer still ends the call as before. The
+  account is matched by phone number or by LID, never one against the other:
+  a peer whose LID has the digits of this account's number is still the peer.
 - The callee `<accept>` now carries the callKey encrypted back to the caller's
   device (`<enc v="2" type="msg" count="0">`, between `<net>` and `<encopt>`).
   An account in coexistence with the Cloud API (the hosted `:99` companion

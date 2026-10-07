@@ -608,13 +608,21 @@ func TestOwnDeviceRejectKeepsIncomingCallRinging(t *testing.T) {
 }
 
 func TestPeerRejectStillEndsIncomingCall(t *testing.T) {
-	eng, call := testEngineWithIncomingCall()
-	var reason string
-	call.OnEnd(func(r string) { reason = r })
+	peers := []types.JID{
+		peerJID(),
+		// A peer LID with the digits of this account's phone number is not this account
+		{User: "5511999999999", Server: types.HiddenUserServer},
+		{User: "333333333333333", Server: types.DefaultUserServer},
+	}
+	for _, from := range peers {
+		eng, call := testEngineWithIncomingCall()
+		var reason string
+		call.OnEnd(func(r string) { reason = r })
 
-	eng.onReject(&events.CallReject{BasicCallMeta: types.BasicCallMeta{CallID: "CID", From: peerJID()}})
-	if call.State() != CallPhaseEnded || reason != "rejected" {
-		t.Fatalf("phase = %d, reason = %q, want Ended/rejected", call.State(), reason)
+		eng.onReject(&events.CallReject{BasicCallMeta: types.BasicCallMeta{CallID: "CID", From: from}})
+		if call.State() != CallPhaseEnded || reason != "rejected" {
+			t.Fatalf("reject from %s: phase = %d, reason = %q, want Ended/rejected", from, call.State(), reason)
+		}
 	}
 }
 

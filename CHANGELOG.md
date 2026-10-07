@@ -17,6 +17,13 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   `Answer` lands). The age comes from the wrapper's server-computed `e`
   attribute (0 on live delivery), so local clock skew cannot misfire the
   gate. Live-validated against a 16-stanza offline backlog.
+- A reject on an incoming call from another device of this same account no
+  longer ends the call. It only declines that device's ring: live, a
+  Meta-hosted companion (`<lid>:99@hosted.lid`) declined every call within a
+  second while the phone kept ringing, and the client ended the call on that
+  reject, so it could no longer be answered here. The call now ends on its
+  terminate (`accepted_elsewhere`, `rejected_elsewhere`, the caller hanging up
+  or timing out). A reject from the peer still ends the call as before.
 
 
 ### media/relay-fanout — `implemented`

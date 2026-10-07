@@ -992,10 +992,18 @@ func preferQualifiedPeer(current string, signaled types.JID) string {
 	return signaled.String()
 }
 
-// onReject tears down an outgoing call when the peer declines it.
+// onReject tears down a call when the peer declines it. On an incoming call a decline from
+// another device of this account only declines that device's ring; the call ends here on its terminate.
 func (e *engine) onReject(ev *events.CallReject) {
 	m := e.lookup(ev.CallID)
 	if m == nil {
+		return
+	}
+	if m.direction == CallDirectionIncoming && e.fromOwnAccount(ev.From) {
+		e.c.log.Info().
+			Str("call_id", ev.CallID).
+			Str("from", ev.From.String()).
+			Msg("another device of this account declined the call; still ringing here")
 		return
 	}
 	e.c.log.Info().
@@ -1006,6 +1014,20 @@ func (e *engine) onReject(ev *events.CallReject) {
 		"event": "peer_reject", "call_id": ev.CallID, "from": ev.From.String(),
 	})
 	e.finishCall(ev.CallID, "rejected")
+}
+
+// fromOwnAccount reports whether jid is any device of this account, by phone number or LID,
+// Meta-hosted companions (<lid>:99@hosted.lid) included.
+func (e *engine) fromOwnAccount(jid types.JID) bool {
+	if jid.User == "" {
+		return false
+	}
+	for _, own := range e.c.groupSelfJIDs() {
+		if own.User == jid.User {
+			return true
+		}
+	}
+	return false
 }
 
 // rlProbe is one relay candidate from a relaylatency probe.

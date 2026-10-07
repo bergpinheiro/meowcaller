@@ -564,6 +564,60 @@ func TestPeerRejectEndsCall(t *testing.T) {
 	}
 }
 
+func testEngineWithIncomingCall() (*engine, *Call) {
+	c := &Client{ownGroupJIDs: func() []types.JID {
+		return []types.JID{
+			{User: "5511999999999", Server: types.DefaultUserServer},
+			{User: "333333333333333", Server: types.HiddenUserServer},
+		}
+	}}
+	c.eng = newEngine(c)
+	call := &Call{eng: c.eng, id: "CID", peer: peerJID(), phase: CallPhaseRinging}
+	c.eng.calls["CID"] = &engineCall{
+		call:      call,
+		direction: CallDirectionIncoming,
+		from:      peerJID(),
+		creator:   peerJID(),
+	}
+	return c.eng, call
+}
+
+func TestOwnDeviceRejectKeepsIncomingCallRinging(t *testing.T) {
+	ownDevices := []types.JID{
+		{User: "333333333333333", Server: types.HostedLIDServer, Device: 99},
+		{User: "333333333333333", Server: types.HiddenUserServer},
+		{User: "5511999999999", Server: types.DefaultUserServer},
+	}
+	for _, from := range ownDevices {
+		eng, call := testEngineWithIncomingCall()
+		ended := false
+		call.OnEnd(func(string) { ended = true })
+
+		eng.onReject(&events.CallReject{BasicCallMeta: types.BasicCallMeta{CallID: "CID", From: from}})
+		if ended || call.State() != CallPhaseRinging || eng.lookup("CID") == nil {
+			t.Fatalf("reject from own device %s ended the call", from)
+		}
+
+		var reason string
+		call.OnEnd(func(r string) { reason = r })
+		eng.onTerminate("CID", "accepted_elsewhere")
+		if call.State() != CallPhaseEnded || reason != "accepted_elsewhere" {
+			t.Fatalf("terminate after own reject: phase = %d, reason = %q", call.State(), reason)
+		}
+	}
+}
+
+func TestPeerRejectStillEndsIncomingCall(t *testing.T) {
+	eng, call := testEngineWithIncomingCall()
+	var reason string
+	call.OnEnd(func(r string) { reason = r })
+
+	eng.onReject(&events.CallReject{BasicCallMeta: types.BasicCallMeta{CallID: "CID", From: peerJID()}})
+	if call.State() != CallPhaseEnded || reason != "rejected" {
+		t.Fatalf("phase = %d, reason = %q, want Ended/rejected", call.State(), reason)
+	}
+}
+
 func TestFinishCallClosesAttachedAudioDevices(t *testing.T) {
 	source := &lifecycleAudioSource{}
 	sink := &lifecycleAudioSink{}

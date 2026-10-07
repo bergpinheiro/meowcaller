@@ -704,7 +704,9 @@ func (e *engine) answer(c *Call) error {
 }
 
 // sendAccept sends the deferred callee <accept> (once), in the WA-Web format (metadata +
-// single rate — the peer keeps the call alive with this; capability+both-rates fails).
+// single rate — the peer keeps the call alive with this; capability+both-rates fails),
+// carrying the callKey encrypted back to the caller: an account in coexistence with the
+// Cloud API refuses a linked device's accept without it (ack error 500).
 func (e *engine) sendAccept(callID string, to, creator types.JID) {
 	e.mu.Lock()
 	m := e.calls[callID]
@@ -714,6 +716,7 @@ func (e *engine) sendAccept(callID string, to, creator types.JID) {
 	}
 	isVideo := m.localVideo || m.remoteVideo
 	m.acceptPending = false
+	callKey := m.callKey
 	e.mu.Unlock()
 
 	accept := signaling.BuildAccept(&signaling.AcceptParams{
@@ -721,6 +724,7 @@ func (e *engine) sendAccept(callID string, to, creator types.JID) {
 		AudioRates: []string{"16000"},
 		Metadata:   waBinary.Attrs{"peer_abtest_bucket_id_list": "125208,94276"},
 		Video:      isVideo,
+		Enc:        e.acceptCallKeyEnc(callID, to, callKey),
 	})
 	accept.Attrs["id"] = e.c.wa.DangerousInternals().GenerateRequestID()
 	if err := e.c.wa.DangerousInternals().SendNode(context.Background(), accept); err != nil {
@@ -728,6 +732,23 @@ func (e *engine) sendAccept(callID string, to, creator types.JID) {
 		return
 	}
 	e.c.log.Info().Str("call_id", callID).Bool("video", isVideo).Msg("accepted (after mute_v2)")
+}
+
+// acceptCallKeyEnc encrypts the callKey to the caller's device for the <accept>. On failure the
+// accept goes without it, as before, which still works for accounts that are not in coexistence.
+func (e *engine) acceptCallKeyEnc(callID string, to types.JID, callKey []byte) *waBinary.Node {
+	if len(callKey) == 0 {
+		return nil
+	}
+	ct, encType, needIdentity, err := encryptCallKeyForDevice(context.Background(), e.c.wa, to, callKey)
+	if err != nil {
+		e.c.log.Warn().Err(err).Str("call_id", callID).Msg("encrypt callKey for accept failed; accepting without it")
+		return nil
+	}
+	if needIdentity {
+		e.c.log.Warn().Str("call_id", callID).Str("enc_type", encType).Msg("accept callKey needs a new session; the peer may not decrypt it")
+	}
+	return &waBinary.Node{Tag: "enc", Attrs: waBinary.Attrs{"v": "2", "type": encType, "count": "0"}, Content: ct}
 }
 
 // reject declines an inbound call.

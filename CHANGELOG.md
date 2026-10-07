@@ -24,6 +24,15 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   reject, so it could no longer be answered here. The call now ends on its
   terminate (`accepted_elsewhere`, `rejected_elsewhere`, the caller hanging up
   or timing out). A reject from the peer still ends the call as before.
+- The callee `<accept>` now carries the callKey encrypted back to the caller's
+  device (`<enc v="2" type="msg" count="0">`, between `<net>` and `<encopt>`).
+  An account in coexistence with the Cloud API (the hosted `:99` companion
+  above) answered a linked device's accept without it with `<ack type="accept"
+  error="500">` and the call dropped; with it, the server accepts. Live-validated
+  on a coexistence account and on a regular one (both answered); the other
+  differences seen in a working third-party accept (`net medium="3"`, no
+  `<metadata>`) were tested and are not needed. If encrypting fails the accept
+  goes without the `<enc>`, as before.
 
 
 ### media/relay-fanout — `implemented`

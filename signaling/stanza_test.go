@@ -119,6 +119,14 @@ func TestAcceptAndPreacceptShape(t *testing.T) {
 	if got := childTags(t, accept); !eqTags(got, []string{"audio", "te", "net", "encopt", "capability"}) {
 		t.Errorf("accept tags = %v", got)
 	}
+	withEnc := BuildAccept(&AcceptParams{
+		CallID: "CID", To: peer, CallCreator: creator, AudioRates: []string{"16000"},
+		Metadata: waBinary.Attrs{"peer_abtest_bucket_id_list": "1"},
+		Enc:      &waBinary.Node{Tag: "enc", Attrs: waBinary.Attrs{"v": "2", "type": "msg", "count": "0"}, Content: []byte{1}},
+	})
+	if got := childTags(t, withEnc); !eqTags(got, []string{"audio", "net", "enc", "encopt", "metadata"}) {
+		t.Errorf("accept with enc tags = %v", got)
+	}
 	pre := BuildPreaccept("CID", peer, creator, "abcd1234", []string{"8000", "16000"}, false)
 	if got := childTags(t, pre); !eqTags(got, []string{"audio", "audio", "encopt", "capability"}) {
 		t.Errorf("preaccept tags = %v", got)

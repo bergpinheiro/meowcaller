@@ -121,9 +121,10 @@ type AcceptParams struct {
 	Capability   []byte         // nil = absent
 	Metadata     waBinary.Attrs // nil = absent
 	Video        bool           // true = advertise <video> (video call)
+	Enc          *waBinary.Node // nil = absent; the callKey encrypted back to the caller's device
 }
 
-// BuildAccept builds <accept>: audio → [video] → [te priority=2] → net medium=2 → encopt →
+// BuildAccept builds <accept>: audio → [video] → [te priority=2] → net medium=2 → [enc] → encopt →
 // [capability] → [metadata] → [rte] → [voip_settings].
 func BuildAccept(p *AcceptParams, log ...zerolog.Logger) waBinary.Node {
 	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/wacore/src/voip/stanza.rs#L124-L162
@@ -136,6 +137,7 @@ func BuildAccept(p *AcceptParams, log ...zerolog.Logger) waBinary.Node {
 		Bool("has_voip_settings", p.VoipSettings != nil).
 		Bool("has_capability", p.Capability != nil).
 		Bool("has_metadata", p.Metadata != nil).
+		Bool("has_enc", p.Enc != nil).
 		Msg("building accept stanza")
 	children := make([]waBinary.Node, 0, len(p.AudioRates)+5)
 	for _, rate := range p.AudioRates {
@@ -148,6 +150,9 @@ func BuildAccept(p *AcceptParams, log ...zerolog.Logger) waBinary.Node {
 		children = append(children, waBinary.Node{Tag: "te", Attrs: waBinary.Attrs{"priority": "2"}, Content: p.RelayTe})
 	}
 	children = append(children, waBinary.Node{Tag: "net", Attrs: waBinary.Attrs{"medium": "2"}})
+	if p.Enc != nil {
+		children = append(children, *p.Enc)
+	}
 	children = append(children, waBinary.Node{Tag: "encopt", Attrs: waBinary.Attrs{"keygen": "2"}})
 	if p.Capability != nil {
 		children = append(children, waBinary.Node{Tag: "capability", Attrs: waBinary.Attrs{"ver": "1"}, Content: p.Capability})

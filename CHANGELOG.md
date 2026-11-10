@@ -23,6 +23,14 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   now kept while the peer's audio flows, and ended only if no audio arrives
   within 6 s of the ack. Adapted from purpshell/meowcaller#50. Live-validated
   on a coexistence account called from a phone.
+- On an outgoing 1:1 call, when one peer device answers, every other device
+  the offer rang is sent `<terminate reason="accepted_elsewhere">`, one stanza
+  per device (a bare user never reaches a companion), as the official clients
+  and zapo do. Before, the peer's other devices kept ringing until their own
+  timeout, and the `terminate reason="timeout"` they then sent ended the call
+  already connected on the answering device (purpshell/meowcaller#39).
+  Live-validated: the peer's phone and WhatsApp Web stop ringing on answer,
+  and a call stays up past the old timeout.
 - Offers older than the caller's 90s ring timeout are ignored. On reconnect
   the server replays call stanzas queued while the client was offline —
   including offers minutes old whose terminate sits right behind them in the

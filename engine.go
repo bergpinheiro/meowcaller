@@ -53,6 +53,8 @@ type engineCall struct {
 	creator types.JID // call-creator JID (for accept/relaylatency)
 	from    types.JID // the <call> "from" — where stanzas are addressed
 
+	peerDevices []types.JID // the peer devices an outgoing offer rang, until one answers
+
 	direction         CallDirection
 	codec             AudioCodec   // audio codec for this call, selected from voip_settings (MLow default)
 	localVideo        bool         // this client is sending, or has requested to send, video
@@ -480,6 +482,7 @@ func (e *engine) placeCall(ctx context.Context, target string, opts CallOptions)
 	m.peerLID = peerLID.String()
 	m.creator = self
 	m.from = peerLID
+	m.peerDevices = devices
 	m.direction = CallDirectionOutgoing
 	m.localVideo = opts.Video
 	m.remoteVideo = opts.Video
@@ -951,6 +954,8 @@ func (e *engine) onAccept(ev *events.CallAccept) {
 	}
 	e.mu.Lock()
 	var rekeyPeer func(string) error
+	var creator types.JID
+	var otherDevices []types.JID
 	answeringPeer := ev.From.String()
 	if current := e.calls[ev.CallID]; current != nil {
 		if device, ok := inviteDeviceCapability(ev.From, ev.Data); ok {
@@ -960,6 +965,13 @@ func (e *engine) onAccept(ev *events.CallAccept) {
 		if !ev.From.IsEmpty() {
 			current.from = ev.From
 			answeringPeer = preferQualifiedPeer(current.peerLID, ev.From)
+			creator = current.creator
+			for _, device := range current.peerDevices {
+				if device != ev.From {
+					otherDevices = append(otherDevices, device)
+				}
+			}
+			current.peerDevices = nil
 		}
 		if answeringPeer != "" && answeringPeer != current.peerLID {
 			current.peerLID = answeringPeer
@@ -990,7 +1002,29 @@ func (e *engine) onAccept(ev *events.CallAccept) {
 		"event": "peer_accept", "call_id": ev.CallID,
 		"from": ev.From.String(), "platform": ev.RemotePlatform, "video": m.localVideo || m.remoteVideo,
 	})
+	e.terminateOtherPeerDevices(ev.CallID, creator, otherDevices)
 	e.maybeStartMedia(ev.CallID)
+}
+
+// terminateOtherPeerDevices tells each peer device that rang but did not answer that the call
+// was accepted elsewhere, one stanza per device: a bare user never reaches a companion.
+func (e *engine) terminateOtherPeerDevices(callID string, creator types.JID, devices []types.JID) {
+	// Source of truth: https://github.com/vinikjkkj/zapo/blob/bec579b5757fd6c00e8f23161b035d4677646fe5/packages/voip/src/call/WaCallMediaSession.ts#L625-L650
+	reason := "accepted_elsewhere"
+	for _, device := range devices {
+		node := signaling.BuildTerminate(&signaling.TerminateParams{
+			CallID: callID, To: device, CallCreator: creator, Reason: &reason,
+		})
+		node.Attrs["id"] = e.nextCallNodeID()
+		if err := e.transmitCallNode(context.Background(), node); err != nil {
+			e.c.log.Warn().Err(err).Str("call_id", callID).Str("device", device.String()).
+				Msg("telling a peer device the call was accepted elsewhere failed")
+		}
+	}
+	if len(devices) > 0 {
+		e.c.log.Info().Str("call_id", callID).Int("devices", len(devices)).
+			Msg("told the peer's other devices the call was accepted elsewhere")
+	}
 }
 
 func inviteDeviceCapability(device types.JID, node *waBinary.Node) (groupCallDevice, bool) {

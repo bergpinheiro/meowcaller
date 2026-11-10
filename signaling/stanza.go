@@ -338,14 +338,15 @@ func BuildMuteV2(callID string, to, callCreator types.JID, muteState string, log
 	return callWrap(to, nil, action)
 }
 
-// BuildReject builds <reject call-id call-creator>.
+// BuildReject builds <reject call-id call-creator count="0">.
 func BuildReject(callID string, to, callCreator types.JID, log ...zerolog.Logger) waBinary.Node {
 	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/41095d4e6ba4610e054e9ede3af1d5e88a83faee/wacore/src/voip/stanza.rs#L306-L316
 	lg := pickLog(log)
 	lg.Debug().
 		Str("call_id", callID).
 		Msg("building reject stanza")
-	action := waBinary.Node{Tag: "reject", Attrs: waBinary.Attrs{"call-id": callID, "call-creator": callCreator}}
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/4ad6d76205c815f65953dfeb5f4bf0c59ce555bc/wacore/src/stanza/call.rs#L1194-L1204
+	action := waBinary.Node{Tag: "reject", Attrs: waBinary.Attrs{"call-id": callID, "call-creator": callCreator, "count": "0"}}
 	return callWrap(to, nil, action)
 }
 

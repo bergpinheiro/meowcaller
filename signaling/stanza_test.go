@@ -220,3 +220,19 @@ func TestTerminateWithTargets(t *testing.T) {
 		t.Error("destination missing")
 	}
 }
+
+func TestRejectShape(t *testing.T) {
+	peer, creator := peerJID(), creatorJID()
+	reject := BuildReject("CID", peer, creator)
+	if reject.Tag != "call" || reject.AttrGetter().JID("to") != peer {
+		t.Fatalf("reject wrapper = <%s to=%s>, want <call to=%s>", reject.Tag, reject.AttrGetter().JID("to"), peer)
+	}
+	action := contentNodes(t, reject)[0]
+	attrs := action.AttrGetter()
+	if action.Tag != "reject" || attrs.String("call-id") != "CID" || attrs.JID("call-creator") != creator {
+		t.Fatalf("reject action = %#v, want <reject call-id=CID call-creator=%s>", action, creator)
+	}
+	if count, _ := attrString(action, "count"); count != "0" {
+		t.Errorf("reject count = %q, want 0", count)
+	}
+}

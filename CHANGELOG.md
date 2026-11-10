@@ -38,6 +38,7 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   linked devices kept ringing until their own timeout. Once a device answers,
   the terminate still goes only to that device. The call fails to hang up only
   when no device was notified.
+- `<reject>` carries `count="0"`, as whatsapp-rust and whatsmeow send it.
 - Offers older than the caller's 90s ring timeout are ignored. On reconnect
   the server replays call stanzas queued while the client was offline —
   including offers minutes old whose terminate sits right behind them in the

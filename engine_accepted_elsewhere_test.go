@@ -71,3 +71,27 @@ func TestAcceptWithoutOfferedDevicesSendsNoAcceptedElsewhere(t *testing.T) {
 		t.Fatalf("accepted_elsewhere sent to %v with no offered devices", targets)
 	}
 }
+
+func TestAcceptMatchesTheAnsweringDeviceWhateverItsAgent(t *testing.T) {
+	eng, _ := testEngineWithOutgoingCall()
+	var sent []waBinary.Node
+	eng.sendCallNode = func(_ context.Context, node waBinary.Node) error {
+		sent = append(sent, node)
+		return nil
+	}
+	phone := types.JID{User: "222222222222222", Server: types.HiddenUserServer}
+	answering := types.JID{User: "222222222222222", Server: types.HiddenUserServer, Device: 21}
+	eng.calls["CID"].peerDevices = []types.JID{phone, answering}
+	answeringWithAgent := answering
+	answeringWithAgent.RawAgent = 1
+
+	eng.onAccept(&events.CallAccept{
+		BasicCallMeta: types.BasicCallMeta{CallID: "CID", From: answeringWithAgent},
+		Data:          &waBinary.Node{Tag: "accept"},
+	})
+
+	targets := acceptedElsewhereTargets(sent)
+	if len(targets) != 1 || targets[phone] != 1 {
+		t.Fatalf("accepted_elsewhere targets = %v, want only %s", targets, phone)
+	}
+}

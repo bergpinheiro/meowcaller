@@ -37,8 +37,22 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   which reaches only the primary phone, so WhatsApp Web, Desktop and other
   linked devices kept ringing until their own timeout. Once a device answers,
   the terminate still goes only to that device. The call fails to hang up only
-  when no device was notified.
+  when no device was notified. A group call still hangs up on its call scope.
 - `<reject>` carries `count="0"`, as whatsapp-rust and whatsmeow send it.
+- On an outgoing 1:1 call, when one peer device rejects, every other device
+  the offer rang is sent `<terminate reason="rejected_elsewhere">`, as
+  whatsapp-rust does: the caller dismisses the callee's other devices. A
+  `busy` or `enc` reject only says that device cannot take the call, so it
+  dismisses nothing (it still ends the call here, as before); neither does a
+  reject on a group call. The device that answered or rejected is matched by
+  user, server and device, whatever its agent, as whatsapp-rust does.
+  Live-validated: a reject from another session, and one from WhatsApp Web,
+  reached the caller, which dismissed the callee's other devices; the
+  callee's phone stopped ringing on the reject.
+- `Reject` reads where the offer came from under the engine lock, and
+  returns `ErrUnknownCall`, sending nothing, for a call that has already
+  ended; it used to send a reject to the bare peer.
+- `Call.IsGroup` reports whether a call is a group call.
 - Offers older than the caller's 90s ring timeout are ignored. On reconnect
   the server replays call stanzas queued while the client was offline —
   including offers minutes old whose terminate sits right behind them in the

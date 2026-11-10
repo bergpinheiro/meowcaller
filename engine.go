@@ -53,7 +53,7 @@ type engineCall struct {
 	creator types.JID // call-creator JID (for accept/relaylatency)
 	from    types.JID // the <call> "from" — where stanzas are addressed
 
-	peerDevices []types.JID // the peer devices an outgoing offer rang, until one answers
+	peerDevices []types.JID // the peer devices an outgoing offer rang, until one answers or rejects
 
 	direction         CallDirection
 	codec             AudioCodec   // audio codec for this call, selected from voip_settings (MLow default)
@@ -211,6 +211,13 @@ func (e *engine) callIsVideo(callID string) bool {
 	defer e.mu.Unlock()
 	m := e.calls[callID]
 	return m != nil && (m.localVideo || m.remoteVideo)
+}
+
+func (e *engine) callIsGroup(callID string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	m := e.calls[callID]
+	return m != nil && m.group
 }
 
 func (e *engine) callIsSendingVideo(callID string) bool {
@@ -774,10 +781,16 @@ func audioSince(c *Call, t time.Time) bool {
 
 // reject declines an inbound call.
 func (e *engine) reject(c *Call) error {
-	m := e.lookup(c.id)
-	to, creator := c.peer, c.peer
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/4ad6d76205c815f65953dfeb5f4bf0c59ce555bc/src/client/voip.rs#L1146-L1193
+	var to, creator types.JID
+	e.mu.Lock()
+	m := e.calls[c.id]
 	if m != nil {
 		to, creator = m.from, m.creator
+	}
+	e.mu.Unlock()
+	if m == nil {
+		return fmt.Errorf("%w %s", ErrUnknownCall, c.id)
 	}
 	rej := signaling.BuildReject(c.id, to, creator)
 	rej.Attrs["id"] = e.nextCallNodeID()
@@ -785,11 +798,13 @@ func (e *engine) reject(c *Call) error {
 	if err := e.transmitCallNode(context.Background(), rej); err != nil {
 		return fmt.Errorf("send reject: %w", err)
 	}
+	e.c.log.Info().Str("call_id", c.id).Str("to", to.String()).Msg("rejected")
 	return nil
 }
 
 // hangup ends a call (either direction) and tears down its media.
 func (e *engine) hangup(c *Call) error {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/4ad6d76205c815f65953dfeb5f4bf0c59ce555bc/src/voip/facade.rs#L5181-L5223
 	targets, creator := e.terminateTargets(c)
 	e.finishCall(c.id, "hangup")
 	notified := 0
@@ -816,9 +831,8 @@ func (e *engine) hangup(c *Call) error {
 	return nil
 }
 
-// terminateTargets returns where a terminate for c must go: the answering peer, or, while an
-// outgoing call still rings, every device the offer rang, since the server does not fan a
-// terminate out.
+// terminateTargets returns where a terminate for c goes: the call scope of a group call, the
+// answering peer, or every device the offer rang while an outgoing 1:1 call still rings.
 func (e *engine) terminateTargets(c *Call) ([]types.JID, types.JID) {
 	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/4ad6d76205c815f65953dfeb5f4bf0c59ce555bc/src/voip/facade.rs#L4121-L4147
 	e.mu.Lock()
@@ -827,7 +841,7 @@ func (e *engine) terminateTargets(c *Call) ([]types.JID, types.JID) {
 	if m == nil {
 		return []types.JID{c.peer}, c.peer
 	}
-	if len(m.peerDevices) > 0 {
+	if !m.group && len(m.peerDevices) > 0 {
 		return append([]types.JID(nil), m.peerDevices...), m.creator
 	}
 	return []types.JID{m.from}, m.creator
@@ -995,12 +1009,7 @@ func (e *engine) onAccept(ev *events.CallAccept) {
 			current.from = ev.From
 			answeringPeer = preferQualifiedPeer(current.peerLID, ev.From)
 			creator = current.creator
-			for _, device := range current.peerDevices {
-				if device != ev.From {
-					otherDevices = append(otherDevices, device)
-				}
-			}
-			current.peerDevices = nil
+			otherDevices = takeOtherPeerDevices(current, ev.From)
 		}
 		if answeringPeer != "" && answeringPeer != current.peerLID {
 			current.peerLID = answeringPeer
@@ -1031,15 +1040,35 @@ func (e *engine) onAccept(ev *events.CallAccept) {
 		"event": "peer_accept", "call_id": ev.CallID,
 		"from": ev.From.String(), "platform": ev.RemotePlatform, "video": m.localVideo || m.remoteVideo,
 	})
-	e.terminateOtherPeerDevices(ev.CallID, creator, otherDevices)
+	e.terminateOtherPeerDevices(ev.CallID, creator, otherDevices, "accepted_elsewhere")
 	e.maybeStartMedia(ev.CallID)
 }
 
-// terminateOtherPeerDevices tells each peer device that rang but did not answer that the call
-// was accepted elsewhere, one stanza per device: a bare user never reaches a companion.
-func (e *engine) terminateOtherPeerDevices(callID string, creator types.JID, devices []types.JID) {
+// takeOtherPeerDevices consumes the devices an outgoing offer rang and returns all but the one
+// that answered or rejected. The caller holds e.mu.
+func takeOtherPeerDevices(m *engineCall, decided types.JID) []types.JID {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/4ad6d76205c815f65953dfeb5f4bf0c59ce555bc/src/voip/direct_ingress.rs#L542-L560
+	var others []types.JID
+	for _, device := range m.peerDevices {
+		if !sameDevice(device, decided) {
+			others = append(others, device)
+		}
+	}
+	m.peerDevices = nil
+	return others
+}
+
+// sameDevice reports whether a and b address the same device, whatever their agent.
+func sameDevice(a, b types.JID) bool {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/4ad6d76205c815f65953dfeb5f4bf0c59ce555bc/src/voip/direct_ingress.rs#L626-L628
+	return a.User == b.User && a.Server == b.Server && a.Device == b.Device
+}
+
+// terminateOtherPeerDevices sends each peer device that rang but did not decide the call a
+// terminate with reason, one stanza per device.
+func (e *engine) terminateOtherPeerDevices(callID string, creator types.JID, devices []types.JID, reason string) {
 	// Source of truth: https://github.com/vinikjkkj/zapo/blob/bec579b5757fd6c00e8f23161b035d4677646fe5/packages/voip/src/call/WaCallMediaSession.ts#L625-L650
-	reason := "accepted_elsewhere"
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/4ad6d76205c815f65953dfeb5f4bf0c59ce555bc/src/voip/direct_ingress.rs#L522-L589
 	for _, device := range devices {
 		node := signaling.BuildTerminate(&signaling.TerminateParams{
 			CallID: callID, To: device, CallCreator: creator, Reason: &reason,
@@ -1047,12 +1076,12 @@ func (e *engine) terminateOtherPeerDevices(callID string, creator types.JID, dev
 		node.Attrs["id"] = e.nextCallNodeID()
 		if err := e.transmitCallNode(context.Background(), node); err != nil {
 			e.c.log.Warn().Err(err).Str("call_id", callID).Str("device", device.String()).
-				Msg("telling a peer device the call was accepted elsewhere failed")
+				Str("reason", reason).Msg("telling a peer device the call was decided elsewhere failed")
 		}
 	}
 	if len(devices) > 0 {
 		e.c.log.Info().Str("call_id", callID).Int("devices", len(devices)).
-			Msg("told the peer's other devices the call was accepted elsewhere")
+			Str("reason", reason).Msg("told the peer's other devices the call was decided elsewhere")
 	}
 }
 
@@ -1094,8 +1123,9 @@ func preferQualifiedPeer(current string, signaled types.JID) string {
 	return signaled.String()
 }
 
-// onReject tears down a call when the peer declines it. On an incoming call a decline from
-// another device of this account only declines that device's ring; the call ends here on its terminate.
+// onReject tears down a call when the peer declines it, first sending the peer's other rung
+// devices rejected_elsewhere on an outgoing 1:1 call. On an incoming call a decline from another
+// device of this account only declines that device's ring; the call ends here on its terminate.
 func (e *engine) onReject(ev *events.CallReject) {
 	m := e.lookup(ev.CallID)
 	if m == nil {
@@ -1108,14 +1138,38 @@ func (e *engine) onReject(ev *events.CallReject) {
 			Msg("another device of this account declined the call; still ringing here")
 		return
 	}
+	var reason string
+	if ev.Data != nil {
+		reason = ev.Data.AttrGetter().OptionalString("reason")
+	}
 	e.c.log.Info().
 		Str("call_id", ev.CallID).
 		Str("from", ev.From.String()).
+		Str("reason", reason).
 		Msg("peer rejected call")
 	e.c.diag.Emit("meta", map[string]any{
-		"event": "peer_reject", "call_id": ev.CallID, "from": ev.From.String(),
+		"event": "peer_reject", "call_id": ev.CallID, "from": ev.From.String(), "reason": reason,
 	})
+	if m.direction == CallDirectionOutgoing && !rejectIsDeviceBusy(reason) {
+		// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/4ad6d76205c815f65953dfeb5f4bf0c59ce555bc/src/voip/direct_ingress.rs#L531-L539
+		e.mu.Lock()
+		var creator types.JID
+		var otherDevices []types.JID
+		if current := e.calls[ev.CallID]; current != nil && !current.group {
+			creator = current.creator
+			otherDevices = takeOtherPeerDevices(current, ev.From)
+		}
+		e.mu.Unlock()
+		e.terminateOtherPeerDevices(ev.CallID, creator, otherDevices, "rejected_elsewhere")
+	}
 	e.finishCall(ev.CallID, "rejected")
+}
+
+// rejectIsDeviceBusy reports whether a reject declines only for that device: busy, or it could
+// not decrypt the offer.
+func rejectIsDeviceBusy(reason string) bool {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/4ad6d76205c815f65953dfeb5f4bf0c59ce555bc/src/voip/direct_ingress.rs#L506-L520
+	return reason == "busy" || reason == "enc"
 }
 
 // fromOwnAccount reports whether jid is any device of this account, by phone number or LID,

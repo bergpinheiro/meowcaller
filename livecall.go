@@ -2,6 +2,7 @@ package meowcaller
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -266,6 +267,12 @@ func (c *Call) IsVideo() bool {
 	return c.eng.callIsVideo(c.id)
 }
 
+// IsGroup reports whether this is a group call. It is false once the call has ended, and a
+// 1:1 call can become a group call later.
+func (c *Call) IsGroup() bool {
+	return c.eng.callIsGroup(c.id)
+}
+
 // IsSendingVideo reports whether this client currently owns an active or pending
 // outbound video flow.
 func (c *Call) IsSendingVideo() bool {
@@ -281,7 +288,10 @@ func (c *Call) IsReceivingVideo() bool {
 // if the call is not in a ringing state.
 func (c *Call) Answer() error { return c.eng.answer(c) }
 
-// Reject declines an inbound call.
+// ErrUnknownCall is returned by Reject when the call is no longer live.
+var ErrUnknownCall = errors.New("meowcaller: unknown call")
+
+// Reject declines an inbound call. It returns ErrUnknownCall when the call has already ended.
 func (c *Call) Reject() error { return c.eng.reject(c) }
 
 // Hangup ends the call (either direction) and tears down media.

@@ -40,18 +40,14 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   or timing out). A reject from the peer still ends the call as before. The
   account is matched by phone number or by LID, never one against the other:
   a peer whose LID has the digits of this account's number is still the peer.
-- The callee `<accept>` now carries the callKey encrypted back to the caller's
-  device (`<enc v="2" type="msg" count="0">`, between `<net>` and `<encopt>`).
-  An account in coexistence with the Cloud API (the hosted `:99` companion
-  above) answered a linked device's accept without it with `<ack type="accept"
-  error="500">` and the call dropped; with it, the server accepts. Live-validated
-  on a coexistence account and on a regular one (both answered); the other
-  differences seen in a working third-party accept (`net medium="3"`, no
-  `<metadata>`) were tested and are not needed. The `<enc>` is attached only
-  under an established Signal session (a `msg`); with none, or one that would
-  send a `pkmsg` (which needs a `<device-identity>` the accept does not carry),
-  the accept goes without it, as before. No prekeys are fetched while handling
-  the `mute_v2` node.
+- The callee `<accept>` no longer carries the callKey (`<enc>`). It was added
+  for an account in coexistence with the Cloud API, whose server acks a linked
+  device's accept with `error="500"`; but the server silently drops (no ack)
+  an accept carrying an `<enc>` when the caller is a linked device, so a call
+  from another meowcaller session never connected. WhatsApp Web and zapo send
+  the accept without it, and the 500 no longer ends an answered call (above).
+  Live-validated between two sessions, and from a phone to a regular and to a
+  coexistence account.
 
 
 ### media/relay-fanout — `implemented`

@@ -706,8 +706,7 @@ func (e *engine) answer(c *Call) error {
 
 // sendAccept sends the callee <accept> (once), in the WA-Web format (metadata +
 // single rate — the peer keeps the call alive with this; capability+both-rates fails),
-// carrying the callKey encrypted back to the caller: an account in coexistence with the
-// Cloud API refuses a linked device's accept without it (ack error 500).
+// without an <enc>: the server drops an accept carrying one.
 func (e *engine) sendAccept(callID string, to, creator types.JID) {
 	e.mu.Lock()
 	m := e.calls[callID]
@@ -717,15 +716,14 @@ func (e *engine) sendAccept(callID string, to, creator types.JID) {
 	}
 	isVideo := m.localVideo || m.remoteVideo
 	m.acceptSent = true
-	callKey := m.callKey
 	e.mu.Unlock()
 
+	// Source of truth: https://github.com/vinikjkkj/zapo/blob/bec579b5757fd6c00e8f23161b035d4677646fe5/packages/voip/src/signaling/lifecycle.ts#L134-L169
 	accept := signaling.BuildAccept(&signaling.AcceptParams{
 		CallID: callID, To: to, CallCreator: creator,
 		AudioRates: []string{"16000"},
 		Metadata:   waBinary.Attrs{"peer_abtest_bucket_id_list": "125208,94276"},
 		Video:      isVideo,
-		Enc:        e.acceptCallKeyEnc(callID, to, callKey),
 	})
 	accept.Attrs["id"] = e.c.wa.DangerousInternals().GenerateRequestID()
 	if err := e.transmitCallNode(context.Background(), accept); err != nil {
@@ -769,21 +767,6 @@ func (e *engine) guardAcceptErrorAck(callID string, m *engineCall, errCode strin
 func audioSince(c *Call, t time.Time) bool {
 	// Source of truth: https://github.com/sanjuniperodee/meowcaller/blob/b3c338029b5b41f27825bb0799dfc955b8d7e850/engine.go#L723-L725
 	return c.lastInboundAudio.Load() >= t.UnixNano()
-}
-
-// acceptCallKeyEnc encrypts the callKey to the caller's device for the <accept>. Without an
-// established session the accept goes without it, as before, which still works for accounts that
-// are not in coexistence.
-func (e *engine) acceptCallKeyEnc(callID string, to types.JID, callKey []byte) *signaling.OfferDeviceKey {
-	if len(callKey) == 0 {
-		return nil
-	}
-	dk, err := encryptCallKeyInSession(context.Background(), e.c.wa, to, callKey)
-	if err != nil {
-		e.c.log.Warn().Err(err).Str("call_id", callID).Msg("accepting without the callKey")
-		return nil
-	}
-	return dk
 }
 
 // reject declines an inbound call.
@@ -1555,29 +1538,6 @@ func encryptCallKeyForDevice(ctx context.Context, cli *whatsmeow.Client, dev typ
 		return nil, "", false, errors.New("enc node has no ciphertext")
 	}
 	return ct, enc.AttrGetter().String("type"), needIdentity, nil
-}
-
-// encryptCallKeyInSession encrypts the callKey for dev only under an established Signal session:
-// it never fetches prekeys (it runs in the node handler) and refuses a pkmsg, which would need a
-// <device-identity> the <accept> does not carry.
-func encryptCallKeyInSession(ctx context.Context, cli *whatsmeow.Client, dev types.JID, callKey []byte) (*signaling.OfferDeviceKey, error) {
-	pt, err := callKeyPlaintext(callKey)
-	if err != nil {
-		return nil, err
-	}
-	enc, _, err := cli.DangerousInternals().EncryptMessageForDevice(ctx, pt, dev, nil, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	encType := enc.AttrGetter().String("type")
-	if encType != "msg" {
-		return nil, fmt.Errorf("no established session with %s (would send %s)", dev, encType)
-	}
-	ct, ok := enc.Content.([]byte)
-	if !ok {
-		return nil, errors.New("enc node has no ciphertext")
-	}
-	return &signaling.OfferDeviceKey{DeviceJid: dev, Ciphertext: ct, EncType: encType}, nil
 }
 
 // decryptInboundCallKey pulls the <enc> from the offer node and decrypts the

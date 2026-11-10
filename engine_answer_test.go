@@ -66,6 +66,11 @@ func TestAnswerSendsAcceptToTheOfferingDevice(t *testing.T) {
 	if attrs.String("call-id") != "CID" || attrs.JID("call-creator") != caller {
 		t.Fatalf("accept identity = %#v", wrapper.GetChildren()[0].Attrs)
 	}
+	for _, child := range wrapper.GetChildren()[0].GetChildren() {
+		if child.Tag == "enc" {
+			t.Fatal("accept carries an <enc>, which makes the server drop it")
+		}
+	}
 	if call.State() != CallPhaseConnecting {
 		t.Fatalf("phase = %d, want connecting", call.State())
 	}

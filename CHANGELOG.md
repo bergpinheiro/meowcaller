@@ -9,6 +9,13 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
 
 ### engine/signaling — `implemented`
 
+- The callee `<accept>` is sent on `Answer`, as the reference does (preaccept
+  and accept together), instead of on the caller's first `<mute_v2>`.
+  `<mute_v2>` only announces the caller's microphone, and another linked
+  device running meowcaller never sends it, so a call between two meowcaller
+  sessions was never accepted; an `Answer` after the caller's first `<mute_v2>`
+  (a person answering seconds later) left the caller ringing the same way.
+  `<mute_v2>` now only drives `OnMuteState`.
 - Offers older than the caller's 90s ring timeout are ignored. On reconnect
   the server replays call stanzas queued while the client was offline —
   including offers minutes old whose terminate sits right behind them in the

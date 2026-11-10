@@ -74,8 +74,8 @@ type engineCall struct {
 	inviteSelfDevice  groupCallDevice
 	invitePeerDevice  groupCallDevice
 
-	// The callee <accept> is deferred until the caller's <mute_v2> arrives.
-	acceptPending bool
+	// The callee <accept> went out; Answer sends it once.
+	acceptSent bool
 }
 
 // newEngine creates the engine for a Client.
@@ -672,8 +672,7 @@ func (e *engine) sendPreaccept(callID string, to, creator types.JID, video bool)
 	return nil
 }
 
-// answer accepts an inbound call: it marks the call to accept (the actual <accept> is
-// deferred until the caller's <mute_v2>, which onCallRaw fires) and brings media up. The
+// answer accepts an inbound call: it sends the <accept> and brings media up. The
 // <preaccept> was already sent eagerly when the offer arrived, so Answer only commits to
 // the call. Media comes up once callKey+relay are both known.
 func (e *engine) answer(c *Call) error {
@@ -695,27 +694,29 @@ func (e *engine) answer(c *Call) error {
 		return nil
 	}
 	e.mu.Lock()
-	m.acceptPending = true
+	to, creator := m.from, m.creator
 	e.mu.Unlock()
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/4ad6d76205c815f65953dfeb5f4bf0c59ce555bc/wacore/src/voip_control/signaling_plan.rs#L136-L196
+	e.sendAccept(c.id, to, creator)
 
 	c.setPhase(CallPhaseConnecting)
 	e.maybeStartMedia(c.id)
 	return nil
 }
 
-// sendAccept sends the deferred callee <accept> (once), in the WA-Web format (metadata +
+// sendAccept sends the callee <accept> (once), in the WA-Web format (metadata +
 // single rate — the peer keeps the call alive with this; capability+both-rates fails),
 // carrying the callKey encrypted back to the caller: an account in coexistence with the
 // Cloud API refuses a linked device's accept without it (ack error 500).
 func (e *engine) sendAccept(callID string, to, creator types.JID) {
 	e.mu.Lock()
 	m := e.calls[callID]
-	if m == nil || !m.acceptPending {
+	if m == nil || m.acceptSent {
 		e.mu.Unlock()
 		return
 	}
 	isVideo := m.localVideo || m.remoteVideo
-	m.acceptPending = false
+	m.acceptSent = true
 	callKey := m.callKey
 	e.mu.Unlock()
 
@@ -727,11 +728,11 @@ func (e *engine) sendAccept(callID string, to, creator types.JID) {
 		Enc:        e.acceptCallKeyEnc(callID, to, callKey),
 	})
 	accept.Attrs["id"] = e.c.wa.DangerousInternals().GenerateRequestID()
-	if err := e.c.wa.DangerousInternals().SendNode(context.Background(), accept); err != nil {
+	if err := e.transmitCallNode(context.Background(), accept); err != nil {
 		e.c.log.Error().Err(err).Str("call_id", callID).Msg("send accept failed")
 		return
 	}
-	e.c.log.Info().Str("call_id", callID).Bool("video", isVideo).Msg("accepted (after mute_v2)")
+	e.c.log.Info().Str("call_id", callID).Bool("video", isVideo).Msg("accepted")
 }
 
 // acceptCallKeyEnc encrypts the callKey to the caller's device for the <accept>. Without an
@@ -819,7 +820,7 @@ func (e *engine) onRelay(callID string, data *waBinary.Node) {
 }
 
 // onRelayLatency answers the caller's relaylatency probes (the callee's half of the
-// relay election). It does NOT send the accept — that is deferred until <mute_v2>.
+// relay election). It does NOT send the accept — Answer does.
 func (e *engine) onRelayLatency(ev *events.CallRelayLatency) {
 	m := e.lookup(ev.CallID)
 	if m == nil || m.direction != CallDirectionIncoming {
@@ -1124,9 +1125,6 @@ func (e *engine) onCallAck(ack *waBinary.Node) {
 	e.onRelay(callID, ack)
 }
 
-// onCallRaw sees every raw <call> node before whatsmeow processes it. It fires the
-// deferred <accept> when the caller's first <mute_v2> arrives (whatsmeow surfaces no
-// mute event, so this is the only place we see it).
 // onCallRaw inspects a raw <call> node before whatsmeow processes it. It returns true when
 // it has fully handled the node (including sending the appropriate ack), so the caller skips
 // whatsmeow's generic typeless ack.
@@ -1160,32 +1158,19 @@ func (e *engine) onCallRaw(callNode *waBinary.Node) bool {
 		}
 		muteState := mv.String("mute-state")
 		muted := muteState == "1"
-		// The deferred <accept> fires on the FIRST mute_v2 only — it arrives right after
-		// the relaylatency/transport. Later mute_v2 nodes are in-call mute-state changes
-		// (e.g. 1→0) and must not re-run the accept path on an already-accepted call.
 		e.mu.Lock()
 		m := e.calls[callID]
-		pending := m != nil && m.acceptPending
 		e.mu.Unlock()
 		if m != nil && m.call != nil {
 			if fn := m.call.onMuteStateFn(); fn != nil {
 				fn(muted)
 			}
 		}
-		if !pending {
-			e.c.log.Debug().
-				Str("call_id", callID).
-				Str("mute_state", muteState).
-				Bool("muted", muted).
-				Msg("mute_v2 observed; call not awaiting accept")
-			return false
-		}
-		e.c.log.Info().
+		e.c.log.Debug().
 			Str("call_id", callID).
 			Str("mute_state", muteState).
 			Bool("muted", muted).
-			Msg("first mute_v2 received; sending deferred accept")
-		e.sendAccept(callID, callNode.AttrGetter().JID("from"), mv.JID("call-creator"))
+			Msg("mute_v2 observed")
 		return false
 	case "video":
 		// Acknowledge the <video> stanza with type="video" — the mid-call video-upgrade

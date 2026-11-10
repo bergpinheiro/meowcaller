@@ -53,9 +53,6 @@ func TestGroupAnswerSendsImmediateCallScopedAccept(t *testing.T) {
 	if attrs.String("call-id") != "GROUP" || attrs.JID("call-creator") != creator {
 		t.Fatalf("accept identity = %#v", children[0].Attrs)
 	}
-	if eng.calls["GROUP"].acceptPending {
-		t.Fatal("group accept was incorrectly deferred to mute_v2")
-	}
 }
 
 func TestInitialGroupAckPublishesAuthoritativeRoster(t *testing.T) {

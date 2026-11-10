@@ -16,6 +16,13 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   sessions was never accepted; an `Answer` after the caller's first `<mute_v2>`
   (a person answering seconds later) left the caller ringing the same way.
   `<mute_v2>` now only drives `OnMuteState`.
+- An error ack on the `<accept>` of an inbound 1:1 call already answered no
+  longer ends it. An account in coexistence with the Cloud API (the hosted
+  `:99` companion rejects with `uncallable`) acks the accept with
+  `error="500"`, yet the caller receives it and the call connects; the call is
+  now kept while the peer's audio flows, and ended only if no audio arrives
+  within 6 s of the ack. Adapted from purpshell/meowcaller#50. Live-validated
+  on a coexistence account called from a phone.
 - Offers older than the caller's 90s ring timeout are ignored. On reconnect
   the server replays call stanzas queued while the client was offline —
   including offers minutes old whose terminate sits right behind them in the

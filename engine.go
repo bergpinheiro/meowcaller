@@ -735,6 +735,42 @@ func (e *engine) sendAccept(callID string, to, creator types.JID) {
 	e.c.log.Info().Str("call_id", callID).Bool("video", isVideo).Msg("accepted")
 }
 
+// acceptErrorAckGrace is how long an answered inbound call kept after an error ack
+// may go without inbound audio before it is ended. Connected peers send audio (or DTX
+// frames, several per second) continuously, so a few seconds is ample.
+var acceptErrorAckGrace = 6 * time.Second
+
+// acceptGoneOut reports whether the inbound call was answered and its <accept> sent.
+func (e *engine) acceptGoneOut(m *engineCall) bool {
+	// Source of truth: https://github.com/sanjuniperodee/meowcaller/blob/b3c338029b5b41f27825bb0799dfc955b8d7e850/engine.go#L700-L704
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return m.acceptSent && m.call != nil && m.call.State() != CallPhaseRinging
+}
+
+// guardAcceptErrorAck ends a call kept after an error ack on its <accept> when no
+// inbound audio has arrived since the ack: the accept did not land after all.
+func (e *engine) guardAcceptErrorAck(callID string, m *engineCall, errCode string, ackAt time.Time) {
+	// Source of truth: https://github.com/sanjuniperodee/meowcaller/blob/b3c338029b5b41f27825bb0799dfc955b8d7e850/engine.go#L708-L720
+	time.Sleep(acceptErrorAckGrace)
+	if e.lookup(callID) != m {
+		return
+	}
+	if m.call != nil && audioSince(m.call, ackAt) {
+		e.c.log.Info().Str("call_id", callID).Str("error_code", errCode).Msg("inbound audio after the error ack; the accept landed")
+		return
+	}
+	e.c.log.Warn().Str("call_id", callID).Str("error_code", errCode).Dur("grace", acceptErrorAckGrace).
+		Msg("no inbound audio after the error ack; ending the call")
+	e.finishCall(callID, "server:"+errCode)
+}
+
+// audioSince reports whether the peer's audio was decoded at or after t.
+func audioSince(c *Call, t time.Time) bool {
+	// Source of truth: https://github.com/sanjuniperodee/meowcaller/blob/b3c338029b5b41f27825bb0799dfc955b8d7e850/engine.go#L723-L725
+	return c.lastInboundAudio.Load() >= t.UnixNano()
+}
+
 // acceptCallKeyEnc encrypts the callKey to the caller's device for the <accept>. Without an
 // established session the accept goes without it, as before, which still works for accounts that
 // are not in coexistence.
@@ -1087,12 +1123,22 @@ func (e *engine) applyVoipSettingsCodec(m *engineCall, node *waBinary.Node, call
 
 // onCallAck handles an <ack class="call"> node. For an outbound offer the relay
 // allocation arrives here (whatsmeow otherwise drops the ack), which is what lets the
-// caller bring up media. An error ack tears the call down.
+// caller bring up media. An error ack tears the call down, except on an inbound call
+// already answered, which is kept while the peer's audio flows.
 func (e *engine) onCallAck(ack *waBinary.Node) {
 	if errCode := ack.AttrGetter().String("error"); errCode != "" {
 		callID := ""
 		if en := findChild(ack, "error"); en != nil {
 			callID = en.AttrGetter().String("call-id")
+		}
+		// Source of truth: https://github.com/sanjuniperodee/meowcaller/blob/b3c338029b5b41f27825bb0799dfc955b8d7e850/engine.go#L1050-L1062
+		// An account in coexistence with the Cloud API acks our <accept> with error 500,
+		// yet the caller receives it; keep the answered call while the peer's audio flows.
+		if m := e.lookup(callID); m != nil && !m.group && m.direction == CallDirectionIncoming && e.acceptGoneOut(m) {
+			e.c.log.Warn().Str("call_id", callID).Str("error_code", errCode).Str("ack_type", ack.AttrGetter().OptionalString("type")).
+				Msg("server error ack after our accept; keeping the answered call while audio flows")
+			go e.guardAcceptErrorAck(callID, m, errCode, time.Now())
+			return
 		}
 		e.c.log.Warn().Str("call_id", callID).Str("error_code", errCode).Msg("call rejected by server")
 		e.finishCall(callID, "server:"+errCode)

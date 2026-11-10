@@ -31,6 +31,13 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   already connected on the answering device (purpshell/meowcaller#39).
   Live-validated: the peer's phone and WhatsApp Web stop ringing on answer,
   and a call stays up past the old timeout.
+- Hanging up an outgoing 1:1 call that still rings sends `<terminate>` to
+  every device the offer rang, one stanza per device, as whatsapp-rust does:
+  the server does not fan a terminate out. Before, it went to the bare user,
+  which reaches only the primary phone, so WhatsApp Web, Desktop and other
+  linked devices kept ringing until their own timeout. Once a device answers,
+  the terminate still goes only to that device. The call fails to hang up only
+  when no device was notified.
 - Offers older than the caller's 90s ring timeout are ignored. On reconnect
   the server replays call stanzas queued while the client was offline —
   including offers minutes old whose terminate sits right behind them in the

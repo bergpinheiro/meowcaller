@@ -790,18 +790,47 @@ func (e *engine) reject(c *Call) error {
 
 // hangup ends a call (either direction) and tears down its media.
 func (e *engine) hangup(c *Call) error {
-	m := e.lookup(c.id)
-	to, creator := c.peer, c.peer
-	if m != nil {
-		to, creator = m.from, m.creator
-	}
-	term := signaling.BuildTerminate(&signaling.TerminateParams{CallID: c.id, To: to, CallCreator: creator})
-	term.Attrs["id"] = e.nextCallNodeID()
+	targets, creator := e.terminateTargets(c)
 	e.finishCall(c.id, "hangup")
-	if err := e.transmitCallNode(context.Background(), term); err != nil {
-		return fmt.Errorf("send terminate: %w", err)
+	notified := 0
+	var failure error
+	for _, to := range targets {
+		term := signaling.BuildTerminate(&signaling.TerminateParams{CallID: c.id, To: to, CallCreator: creator})
+		term.Attrs["id"] = e.nextCallNodeID()
+		if err := e.transmitCallNode(context.Background(), term); err != nil {
+			if failure == nil {
+				failure = err
+			}
+			continue
+		}
+		notified++
 	}
+	if failure == nil {
+		return nil
+	}
+	if notified == 0 {
+		return fmt.Errorf("send terminate: %w", failure)
+	}
+	e.c.log.Warn().Err(failure).Str("call_id", c.id).Int("notified", notified).
+		Int("unconfirmed", len(targets)-notified).Msg("terminate reached only some of the rung devices")
 	return nil
+}
+
+// terminateTargets returns where a terminate for c must go: the answering peer, or, while an
+// outgoing call still rings, every device the offer rang, since the server does not fan a
+// terminate out.
+func (e *engine) terminateTargets(c *Call) ([]types.JID, types.JID) {
+	// Source of truth: https://github.com/oxidezap/whatsapp-rust/blob/4ad6d76205c815f65953dfeb5f4bf0c59ce555bc/src/voip/facade.rs#L4121-L4147
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	m := e.calls[c.id]
+	if m == nil {
+		return []types.JID{c.peer}, c.peer
+	}
+	if len(m.peerDevices) > 0 {
+		return append([]types.JID(nil), m.peerDevices...), m.creator
+	}
+	return []types.JID{m.from}, m.creator
 }
 
 // onRelay records relay data from a relaylatency/transport/ack stanza and starts media
